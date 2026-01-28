@@ -3,7 +3,7 @@ from telebot import types
 from flask import Flask, request
 import json, os
 
-TOKEN = "8341867404:AAG1fmvyiLuHq1HOrr1XdZKmXTVhW1_zBMY"
+TOKEN = "8275637960:AAHSf_bh-ztbLqtQRVys1KizveKKcEahr8U"
 OWNER_ID = 8321215905
 WEBHOOK_URL = "https://3pznnryz17.onrender.com"
 
