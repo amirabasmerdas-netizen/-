@@ -31,6 +31,7 @@ def load_db():
         "allowed_users":[],
         "pending_users":[],
         "forward_on":False,
+        "target_group":None,
         "users":{}
     }
 
@@ -58,9 +59,11 @@ def main_kb(uid):
     if uid in db["allowed_users"] or uid in db["owners"]:
         kb.add("▶️ شروع فوروارد","⏹ توقف فوروارد")
         kb.add("➕ افزودن کانال","➖ حذف کانال")
-        kb.add("👥 دعوت دوستان")
+        kb.add("👥 دعوت دوستان","📊 آمار من")
     else:
         kb.add("🔐 درخواست دسترسی")
+    if uid in db["owners"]:
+        kb.add("🎯 تنظیم گروه مقصد","📋 لاگ کاربران")
     return kb
 
 def owner_req_kb(uid):
@@ -82,6 +85,8 @@ def start(m):
         ref=m.text.split()[1].split("_")[1]
         if ref!=str(uid) and ref in db["users"]:
             db["users"][ref]["referrals"]+=1
+            bot.send_message(int(ref),
+                f"👤 {m.from_user.first_name} با لینک دعوت شما وارد ربات شد 🎉")
             r=db["users"][ref]["referrals"]
             if r>=10: db["users"][ref]["level"]="gold"
             elif r>=4: db["users"][ref]["level"]="silver"
@@ -113,7 +118,8 @@ def decide(c):
     uid=int(c.data.split("_")[1])
     if c.data.startswith("ok_"):
         db["allowed_users"].append(uid)
-        bot.send_message(uid,"✅ دسترسی فعال شد")
+        bot.send_message(uid,
+            "🎉 خوش آمدید!\n✅ دسترسی شما فعال شد\n🔁 لطفاً /start را دوباره بزنید")
     else:
         bot.send_message(uid,"❌ درخواست رد شد")
     if uid in db["pending_users"]:
@@ -121,7 +127,106 @@ def decide(c):
     save_db()
     bot.answer_callback_query(c.id,"انجام شد")
 
-# ---------- FORWARD CONTROL ----------
+# ---------- OWNER ----------
+@bot.message_handler(func=lambda m:m.text=="🎯 تنظیم گروه مقصد")
+def set_group_step(m):
+    if m.from_user.id not in db["owners"]: return
+    bot.send_message(m.chat.id,"@group ؟")
+    bot.register_next_step_handler(m,set_group)
+
+def set_group(m):
+    db["target_group"]=m.text.strip()
+    save_db()
+    bot.send_message(m.chat.id,"✅ گروه مقصد تنظیم شد")
+
+@bot.message_handler(func=lambda m:m.text=="📋 لاگ کاربران")
+def logs(m):
+    if m.from_user.id not in db["owners"]: return
+    text="📊 لاگ کاربران:\n\n"
+    for uid,u in db["users"].items():
+        text+=(
+            f"🆔 {uid}\n"
+            f"🎚 سطح: {u['level']}\n"
+            f"📣 دعوت: {u['referrals']}\n"
+            f"📡 کانال‌ها: {len(u['channels'])}\n\n"
+        )
+    bot.send_message(m.chat.id,text)
+
+# ---------- STATS ----------
+@bot.message_handler(func=lambda m:m.text=="📊 آمار من")
+def stats(m):
+    u=db["users"][str(m.from_user.id)]
+    bot.send_message(
+        m.chat.id,
+        f"🎚 سطح: {u['level']}\n"
+        f"👥 دعوت‌ها: {u['referrals']}\n"
+        f"📡 کانال‌ها: {len(u['channels'])}"
+    )
+
+# ---------- CHANNEL ----------
+@bot.message_handler(func=lambda m:m.text=="➕ افزودن کانال")
+def add_ch_step(m):
+    bot.send_message(m.chat.id,"@channel ؟")
+    bot.register_next_step_handler(m,add_channel)
+
+def add_channel(m):
+    uid=str(m.chat.id)
+    ch=m.text.strip()
+    user=db["users"][uid]
+    lvl=LEVELS[user["level"]]
+
+    if len(user["channels"])>=lvl["channels"]:
+        return bot.send_message(m.chat.id,"❌ سقف کانال پر شده")
+
+    try:
+        member=bot.get_chat_member(ch,bot.get_me().id)
+        if member.status not in ["administrator","creator"]:
+            return bot.send_message(m.chat.id,"❌ ربات ادمین نیست")
+    except:
+        return bot.send_message(m.chat.id,"❌ کانال نامعتبر")
+
+    user["channels"].append(ch)
+    save_db()
+    bot.send_message(m.chat.id,"✅ کانال اضافه شد")
+
+@bot.message_handler(func=lambda m:m.text=="➖ حذف کانال")
+def rm_ch_step(m):
+    bot.send_message(m.chat.id,"@channel ؟")
+    bot.register_next_step_handler(m,rm_channel)
+
+def rm_channel(m):
+    uid=str(m.chat.id)
+    ch=m.text.strip()
+    if ch in db["users"][uid]["channels"]:
+        db["users"][uid]["channels"].remove(ch)
+        save_db()
+        bot.send_message(m.chat.id,"❌ حذف شد")
+
+# ---------- LIMIT ----------
+def can_forward(uid):
+    today=str(date.today())
+    user=db["users"][str(uid)]
+    lvl=LEVELS[user["level"]]
+
+    user["daily"].setdefault(today,0)
+    if user["daily"][today]>=lvl["limit"]:
+        return False
+    user["daily"][today]+=1
+    save_db()
+    return True
+
+# ---------- FORWARD ----------
+@bot.channel_post_handler(func=lambda m:True)
+def forward(m):
+    if not db["forward_on"] or not db["target_group"]: return
+    for uid,data in db["users"].items():
+        if can_forward(uid):
+            try:
+                bot.forward_message(db["target_group"],m.chat.id,m.message_id)
+            except:
+                pass
+
+# ---------- CONTROL ----------
 @bot.message_handler(func=lambda m:m.text=="▶️ شروع فوروارد")
 def start_fw(m):
     if m.from_user.id not in db["allowed_users"]+db["owners"]: return
@@ -136,89 +241,10 @@ def stop_fw(m):
     save_db()
     bot.send_message(m.chat.id,"⏹ فوروارد متوقف شد")
 
-# ---------- CHANNEL (USER) ----------
-@bot.message_handler(func=lambda m:m.text=="➕ افزودن کانال")
-def add_ch_step(m):
-    bot.send_message(m.chat.id,"لطفاً @channel را ارسال کنید:")
-    bot.register_next_step_handler(m,add_channel)
-
-def add_channel(m):
-    uid=str(m.chat.id)
-    ch=m.text.strip()
-    user=db["users"][uid]
-    lvl=LEVELS[user["level"]]
-
-    if len(user["channels"])>=lvl["channels"]:
-        return bot.send_message(m.chat.id,"❌ سقف کانال مجاز شما پر شده")
-
-    try:
-        member=bot.get_chat_member(ch,bot.get_me().id)
-        if member.status not in ["administrator","creator"]:
-            return bot.send_message(m.chat.id,"❌ ربات باید ادمین کانال باشد")
-    except:
-        return bot.send_message(m.chat.id,"❌ کانال نامعتبر است")
-
-    user["channels"].append(ch)
-    save_db()
-    bot.send_message(m.chat.id,"✅ کانال ثبت شد")
-
-@bot.message_handler(func=lambda m:m.text=="➖ حذف کانال")
-def rm_ch_step(m):
-    bot.send_message(m.chat.id,"لطفاً @channel را ارسال کنید:")
-    bot.register_next_step_handler(m,rm_channel)
-
-def rm_channel(m):
-    uid=str(m.chat.id)
-    ch=m.text.strip()
-    if ch in db["users"][uid]["channels"]:
-        db["users"][uid]["channels"].remove(ch)
-        save_db()
-        bot.send_message(m.chat.id,"❌ کانال حذف شد")
-    else:
-        bot.send_message(m.chat.id,"کانال پیدا نشد")
-
-# ---------- INVITE ----------
-@bot.message_handler(func=lambda m:m.text=="👥 دعوت دوستان")
-def invite(m):
-    link=f"https://t.me/{bot.get_me().username}?start=ref_{m.from_user.id}"
-    bot.send_message(
-        m.chat.id,
-        f"🔗 لینک دعوت اختصاصی شما:\n{link}\n\n"
-        "🎁 با دعوت دوستان سطح دسترسی بگیر"
-    )
-
-# ---------- LIMIT ----------
-def can_forward(uid,ch):
-    today=str(date.today())
-    user=db["users"][str(uid)]
-    lvl=LEVELS[user["level"]]
-
-    user["daily"].setdefault(ch,{})
-    user["daily"][ch].setdefault(today,0)
-
-    if user["daily"][ch][today]>=lvl["limit"]:
-        return False
-
-    user["daily"][ch][today]+=1
-    save_db()
-    return True
-
-# ---------- FORWARD ----------
-@bot.channel_post_handler(func=lambda m:True)
-def forward(m):
-    if not db["forward_on"]: return
-    for uid,data in db["users"].items():
-        for ch in data["channels"]:
-            if can_forward(uid,ch):
-                try:
-                    bot.forward_message(ch,m.chat.id,m.message_id)
-                except:
-                    pass
-
 # ---------- WEBHOOK ----------
 @app.route("/",methods=["GET"])
 def home():
-    return "Bot is alive"
+    return "alive"
 
 @app.route(f"/{TOKEN}",methods=["POST"])
 def hook():
