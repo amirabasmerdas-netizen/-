@@ -4,7 +4,7 @@ from flask import Flask, request
 from datetime import date
 
 # ---------- CONFIG ----------
-TOKEN = "YOUR_BOT_TOKEN"
+TOKEN = "8341867404:AAG1fmvyiLuHq1HOrr1XdZKmXTVhW1_zBMY"
 OWNER_ID = 8321215905
 USE_WEBHOOK = True
 WEBHOOK_URL = "https://your-app.onrender.com"
