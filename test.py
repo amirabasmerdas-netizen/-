@@ -18,12 +18,14 @@ def load_db():
         with open(DB_FILE,"r",encoding="utf-8") as f:
             return json.load(f)
     return {
-        "users": {},
-        "channels": {},
+        "users": {},              # uid: {name, approved}
+        "channels": {},           # uid: channel
+        "groups": [],
+        "forward_status": {},
         "pending_users": {},
         "pending_channels": {},
-        "groups": [],
-        "forward_status": {}
+        "referrals": {},          # uid: [invited_ids]
+        "invited_by": {}          # uid: inviter
     }
 
 def save_db():
@@ -39,19 +41,29 @@ def main_kb(uid):
     kb.add("📋 لیست")
     kb.add("▶️ شروع فروارد","⏹ توقف فروارد")
     if uid != OWNER_ID:
+        kb.add("📨 دعوت دوستان","📊 لاگ من")
         kb.add("📞 ارتباط با ادمین","📘 راهنما")
     if uid == OWNER_ID:
         kb.add("👥 تنظیمات گروه مقصد")
     return kb
 
-# ---------- استارت ----------
+# ---------- استارت + رفرال ----------
 @bot.message_handler(commands=["start"])
 def start(msg):
     uid = msg.from_user.id
-    name = msg.from_user.first_name
+    name = msg.from_user.first_name or "نامشخص"
+    args = msg.text.split()
 
     if uid not in db["users"] and uid != OWNER_ID:
+        ref = int(args[1]) if len(args)>1 and args[1].isdigit() else None
+
         db["pending_users"][uid] = name
+
+        if ref and ref != uid and ref in db["users"]:
+            db["invited_by"][uid] = ref
+            db["referrals"].setdefault(ref, []).append(uid)
+            bot.send_message(ref,f"🎉 کاربر جدید با لینک دعوت شما وارد ربات شد\n🆔 {uid}")
+
         save_db()
 
         kb = types.InlineKeyboardMarkup()
@@ -74,19 +86,19 @@ def start(msg):
 
 # ---------- تأیید کاربر ----------
 @bot.callback_query_handler(func=lambda c: c.data.startswith(("approve_user","reject_user")))
-def user_approve(c):
+def approve_user(c):
     action,uid = c.data.split(":")
     uid = int(uid)
 
     if action=="approve_user":
         db["users"][uid] = db["pending_users"].pop(uid)
         save_db()
-        bot.send_message(uid,"✅ درخواست شما تأیید شد\nلطفاً دوباره /start بزنید")
-        bot.answer_callback_query(c.id,"کاربر اضافه شد")
+        bot.send_message(uid,"✅ درخواست شما تأیید شد\nلطفاً /start بزنید")
+        bot.answer_callback_query(c.id,"تأیید شد")
     else:
         db["pending_users"].pop(uid,None)
         save_db()
-        bot.send_message(uid,"❌ متأسفانه درخواست شما رد شد")
+        bot.send_message(uid,"❌ درخواست شما رد شد")
         bot.answer_callback_query(c.id,"رد شد")
 
 # ---------- دکمه‌ها ----------
@@ -98,7 +110,24 @@ def buttons(msg):
     if uid != OWNER_ID and uid not in db["users"]:
         return
 
-    if t=="⚙️ تنظیم کانال مبدأ":
+    if t=="📨 دعوت دوستان":
+        link=f"https://t.me/{bot.get_me().username}?start={uid}"
+        bot.send_message(uid,f"🔗 لینک دعوت شما:\n{link}")
+
+    elif t=="📊 لاگ من":
+        invited = db["referrals"].get(uid,[])
+        ch = db["channels"].get(str(uid),"ثبت نشده")
+        status = "روشن" if db["forward_status"].get(str(uid)) else "خاموش"
+        bot.send_message(
+            uid,
+            f"📊 لاگ شما\n"
+            f"📢 کانال: {ch}\n"
+            f"▶️ فروارد: {status}\n"
+            f"👥 دعوت‌شده‌ها: {len(invited)}\n"
+            f"{invited}"
+        )
+
+    elif t=="⚙️ تنظیم کانال مبدأ":
         kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
         kb.add("➕ وصل کردن کانال","➖ حذف کانال","⬅️ بازگشت")
         bot.send_message(uid,"پنل تنظیم کانال",reply_markup=kb)
@@ -108,96 +137,80 @@ def buttons(msg):
         bot.register_next_step_handler(msg,add_channel)
 
     elif t=="➖ حذف کانال":
-        bot.send_message(uid,"@کانال برای حذف")
+        bot.send_message(uid,"@کانال را ارسال کنید")
         bot.register_next_step_handler(msg,remove_channel)
 
     elif t=="▶️ شروع فروارد":
         db["forward_status"][str(uid)] = True
         save_db()
-        bot.send_message(uid,"▶️ فروارد برای شما روشن شد")
+        bot.send_message(uid,"▶️ فروارد فعال شد")
 
     elif t=="⏹ توقف فروارد":
         db["forward_status"][str(uid)] = False
         save_db()
-        bot.send_message(uid,"⏹ فروارد برای شما متوقف شد")
-
-    elif t=="📋 لیست":
-        if uid==OWNER_ID:
-            txt="📋 لیست کامل:\n"
-            for u,ch in db["channels"].items():
-                txt+=f"\n👤 {u} → {ch}"
-            txt+=f"\n\n👥 گروه‌ها:\n" + "\n".join(db["groups"])
-            bot.send_message(uid,txt or "خالی")
-        else:
-            ch=db["channels"].get(str(uid))
-            bot.send_message(uid,f"📋 کانال شما:\n{ch if ch else 'ثبت نشده'}")
-
-    elif t=="📞 ارتباط با ادمین":
-        bot.send_message(uid,f"📞 ارتباط با ادمین:\n@your_username")
-
-    elif t=="📘 راهنما":
-        bot.send_message(uid,"📘 ابتدا ربات را ادمین کانال کنید سپس لینک @کانال را ارسال نمایید")
+        bot.send_message(uid,"⏹ فروارد متوقف شد")
 
     elif t=="👥 تنظیمات گروه مقصد" and uid==OWNER_ID:
         bot.send_message(uid,"@گروه مقصد را ارسال کنید")
         bot.register_next_step_handler(msg,set_group)
 
     elif t=="⬅️ بازگشت":
-        bot.send_message(uid,"بازگشت به پنل اصلی",reply_markup=main_kb(uid))
+        bot.send_message(uid,"بازگشت",reply_markup=main_kb(uid))
 
-# ---------- افزودن کانال ----------
+# ---------- افزودن کانال + درخواست به مالک ----------
 def add_channel(msg):
     uid = msg.chat.id
     ch = msg.text.strip()
 
-    if not ch.startswith("@"):
-        return bot.send_message(uid,"❌ لینک باید با @ باشد")
-
     try:
+        info = bot.get_chat(ch)
         m = bot.get_chat_member(ch,bot.get_me().id)
         if m.status not in ["administrator","creator"]:
             return bot.send_message(uid,"❌ ربات ادمین کانال نیست")
-        info = bot.get_chat(ch)
     except:
         return bot.send_message(uid,"❌ کانال معتبر نیست")
 
-    db["pending_channels"][uid] = ch
-    save_db()
-
     kb = types.InlineKeyboardMarkup()
     kb.add(
-        types.InlineKeyboardButton("✅ تأیید",callback_data=f"confirm_ch:{uid}"),
-        types.InlineKeyboardButton("❌ رد",callback_data=f"cancel_ch:{uid}")
+        types.InlineKeyboardButton("✅ پذیرش کانال",callback_data=f"approve_ch:{uid}:{ch}"),
+        types.InlineKeyboardButton("❌ رد کانال",callback_data=f"reject_ch:{uid}")
     )
 
     bot.send_message(
-        uid,
-        f"نام: {info.title}\nبیو: {info.description}\nID: {info.id}",
+        OWNER_ID,
+        f"📢 درخواست کانال\n"
+        f"👤 کاربر: {uid}\n"
+        f"📛 نام: {info.title}\n"
+        f"📝 توضیح: {info.description}\n"
+        f"🆔 {info.id}",
         reply_markup=kb
     )
 
-# ---------- تأیید کانال ----------
-@bot.callback_query_handler(func=lambda c: c.data.startswith(("confirm_ch","cancel_ch")))
-def channel_confirm(c):
-    action,uid = c.data.split(":")
-    uid=int(uid)
+    bot.send_message(uid,"📩 کانال برای بررسی ارسال شد")
 
-    if action=="confirm_ch":
-        ch = db["pending_channels"].pop(uid)
-        db["channels"][str(uid)] = ch
+# ---------- تأیید کانال توسط مالک ----------
+@bot.callback_query_handler(func=lambda c: c.data.startswith(("approve_ch","reject_ch")))
+def approve_channel(c):
+    data = c.data.split(":")
+    action = data[0]
+
+    if action=="approve_ch":
+        uid = data[1]
+        ch = data[2]
+        db["channels"][uid] = ch
         save_db()
-        bot.send_message(uid,"📩 کانال شما برای بررسی به مالک ارسال شد")
-        bot.send_message(OWNER_ID,f"📩 درخواست کانال:\n👤 {uid}\n📢 {ch}")
+        bot.send_message(int(uid),"✅ کانال شما تأیید شد")
+        bot.answer_callback_query(c.id,"کانال ثبت شد")
     else:
-        db["pending_channels"].pop(uid,None)
-        save_db()
-        bot.send_message(uid,"❌ عملیات لغو شد")
+        uid = data[1]
+        bot.send_message(int(uid),"❌ کانال شما رد شد")
+        bot.answer_callback_query(c.id,"رد شد")
 
 # ---------- حذف کانال ----------
 def remove_channel(msg):
-    uid=msg.chat.id
-    ch=msg.text.strip()
-    if db["channels"].get(str(uid))==ch:
+    uid = msg.chat.id
+    ch = msg.text.strip()
+    if db["channels"].get(str(uid)) == ch:
         del db["channels"][str(uid)]
         save_db()
         bot.send_message(uid,"❌ کانال حذف شد")
@@ -206,14 +219,14 @@ def remove_channel(msg):
 
 # ---------- تنظیم گروه ----------
 def set_group(msg):
-    g=msg.text.strip()
+    g = msg.text.strip()
     try:
-        m=bot.get_chat_member(g,bot.get_me().id)
+        m = bot.get_chat_member(g,bot.get_me().id)
         if m.status not in ["administrator","creator"]:
             return bot.send_message(msg.chat.id,"❌ ربات ادمین گروه نیست")
         db["groups"].append(g)
         save_db()
-        bot.send_message(msg.chat.id,"✅ گروه مقصد اضافه شد")
+        bot.send_message(msg.chat.id,"✅ گروه اضافه شد")
     except:
         bot.send_message(msg.chat.id,"❌ گروه معتبر نیست")
 
@@ -222,7 +235,7 @@ def set_group(msg):
 def forward(msg):
     for uid,ch in db["channels"].items():
         if db["forward_status"].get(uid):
-            if msg.chat.username and "@"+msg.chat.username==ch:
+            if msg.chat.username and "@"+msg.chat.username == ch:
                 for g in db["groups"]:
                     try:
                         bot.forward_message(g,msg.chat.id,msg.message_id)
