@@ -7,7 +7,7 @@ from datetime import date
 TOKEN = "8341867404:AAG1fmvyiLuHq1HOrr1XdZKmXTVhW1_zBMY"
 OWNER_ID = 8321215905
 USE_WEBHOOK = True
-WEBHOOK_URL = "https://your-app.onrender.com"
+WEBHOOK_URL = "https://3pznnryz17.onrender.com"
 DB_FILE = "db.json"
 
 bot = telebot.TeleBot(TOKEN)
