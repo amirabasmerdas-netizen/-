@@ -1,38 +1,27 @@
-import telebot, json, os
+import telebot
 from telebot import types
 from flask import Flask, request
-from datetime import date
+import json, os, time
 
-# ---------- CONFIG ----------
 TOKEN = "8341867404:AAG1fmvyiLuHq1HOrr1XdZKmXTVhW1_zBMY"
 OWNER_ID = 8321215905
-USE_WEBHOOK = True
 WEBHOOK_URL = "https://3pznnryz17.onrender.com"
-DB_FILE = "db.json"
 
 bot = telebot.TeleBot(TOKEN)
 app = Flask(__name__)
 
-# ---------- LEVELS ----------
-LEVELS = {
-    "normal": {"channels":1, "limit":1000},
-    "bronze": {"channels":2, "limit":2000},
-    "silver": {"channels":4, "limit":4000},
-    "gold":   {"channels":10,"limit":10000},
-}
+DB_FILE = "db.json"
 
-# ---------- DB ----------
+# ---------- دیتابیس ----------
 def load_db():
     if os.path.exists(DB_FILE):
         with open(DB_FILE,"r") as f:
             return json.load(f)
     return {
-        "owners":[OWNER_ID],
-        "allowed_users":[],
-        "pending_users":[],
-        "forward_on":False,
-        "target_group":None,
-        "users":{}
+        "users": {},
+        "channels": {},
+        "target_group": None,
+        "forward_enabled": False
     }
 
 def save_db():
@@ -41,222 +30,162 @@ def save_db():
 
 db = load_db()
 
-# ---------- USER INIT ----------
-def init_user(uid):
-    uid=str(uid)
+# ---------- سطوح ----------
+LEVELS = {
+    "normal": {"channels":1,"friends":0},
+    "bronze": {"channels":2,"friends":2},
+    "silver": {"channels":4,"friends":4},
+    "gold": {"channels":10,"friends":10}
+}
+
+# ---------- کیبورد ----------
+def user_kb(uid):
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    kb.add("➕ افزودن کانال","📨 دعوت دوستان")
+    kb.add("📊 وضعیت حساب")
+    return kb
+
+def owner_kb():
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    kb.add("✅ روشن کردن فروارد","⛔ خاموش کردن فروارد")
+    kb.add("🎯 تنظیم گروه مقصد")
+    kb.add("📋 لاگ کاربران")
+    return kb
+
+# ---------- استارت ----------
+@bot.message_handler(commands=["start"])
+def start(msg):
+    uid = msg.from_user.id
+    ref = msg.text.split(" ")[1] if len(msg.text.split())>1 else None
+
     if uid not in db["users"]:
-        db["users"][uid]={
+        db["users"][uid] = {
             "level":"normal",
-            "channels":[],
-            "daily":{},
-            "referrals":0
+            "friends":0,
+            "invited_by":ref,
+            "approved": False
         }
+
+        if ref and ref.isdigit() and int(ref) in db["users"]:
+            inviter = int(ref)
+            db["users"][inviter]["friends"] += 1
+            bot.send_message(inviter,f"🎉 کاربر جدید با لینک دعوت شما وارد شد!\n👤 {uid}")
+            update_level(inviter)
+
         save_db()
 
-# ---------- KEYBOARDS ----------
-def main_kb(uid):
-    kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    if uid in db["allowed_users"] or uid in db["owners"]:
-        kb.add("▶️ شروع فوروارد","⏹ توقف فوروارد")
-        kb.add("➕ افزودن کانال","➖ حذف کانال")
-        kb.add("👥 دعوت دوستان","📊 آمار من")
-    else:
-        kb.add("🔐 درخواست دسترسی")
-    if uid in db["owners"]:
-        kb.add("🎯 تنظیم گروه مقصد","📋 لاگ کاربران")
-    return kb
+    if uid == OWNER_ID:
+        bot.send_message(uid,"👑 پنل مالک",reply_markup=owner_kb())
+        return
 
-def owner_req_kb(uid):
-    kb = types.InlineKeyboardMarkup()
-    kb.add(
-        types.InlineKeyboardButton("✅ تأیید",callback_data=f"ok_{uid}"),
-        types.InlineKeyboardButton("❌ رد",callback_data=f"no_{uid}")
-    )
-    return kb
+    if not db["users"][uid]["approved"]:
+        bot.send_message(uid,"⏳ درخواست شما ثبت شد، منتظر تایید مالک باشید")
+        bot.send_message(OWNER_ID,f"📩 درخواست جدید:\n🆔 {uid}")
+        return
 
-# ---------- START ----------
-@bot.message_handler(commands=["start"])
-def start(m):
-    uid=m.from_user.id
-    init_user(uid)
+    bot.send_message(uid,"👋 خوش آمدید!\nربات آماده استفاده است",reply_markup=user_kb(uid))
 
-    # referral
-    if len(m.text.split())>1 and m.text.split()[1].startswith("ref_"):
-        ref=m.text.split()[1].split("_")[1]
-        if ref!=str(uid) and ref in db["users"]:
-            db["users"][ref]["referrals"]+=1
-            bot.send_message(int(ref),
-                f"👤 {m.from_user.first_name} با لینک دعوت شما وارد ربات شد 🎉")
-            r=db["users"][ref]["referrals"]
-            if r>=10: db["users"][ref]["level"]="gold"
-            elif r>=4: db["users"][ref]["level"]="silver"
-            elif r>=2: db["users"][ref]["level"]="bronze"
+# ---------- ارتقای سطح ----------
+def update_level(uid):
+    f = db["users"][uid]["friends"]
+    if f>=10: db["users"][uid]["level"]="gold"
+    elif f>=4: db["users"][uid]["level"]="silver"
+    elif f>=2: db["users"][uid]["level"]="bronze"
+    save_db()
+
+# ---------- دکمه‌ها ----------
+@bot.message_handler(func=lambda m: True)
+def buttons(msg):
+    uid = msg.from_user.id
+    t = msg.text
+
+    # مالک
+    if uid == OWNER_ID:
+        if t=="✅ روشن کردن فروارد":
+            db["forward_enabled"]=True
             save_db()
+            bot.send_message(uid,"✅ فروارد روشن شد")
+        elif t=="⛔ خاموش کردن فروارد":
+            db["forward_enabled"]=False
+            save_db()
+            bot.send_message(uid,"⛔ فروارد خاموش شد")
+        elif t=="🎯 تنظیم گروه مقصد":
+            bot.send_message(uid,"@گروه مقصد را ارسال کن")
+            bot.register_next_step_handler(msg,set_target_group)
+        elif t=="📋 لاگ کاربران":
+            txt=""
+            for u,d in db["users"].items():
+                txt+=f"\n🆔 {u} | {d['level']} | دوستان: {d['friends']}"
+            bot.send_message(uid,txt or "خالی")
+        return
 
-    bot.send_message(uid,"🤖 خوش اومدی",reply_markup=main_kb(uid))
+    # کاربر
+    if t=="📨 دعوت دوستان":
+        link=f"https://t.me/{bot.get_me().username}?start={uid}"
+        bot.send_message(uid,f"🔗 لینک دعوت اختصاصی:\n{link}\n👥 دوستان: {db['users'][uid]['friends']}")
+    elif t=="📊 وضعیت حساب":
+        d=db["users"][uid]
+        bot.send_message(uid,f"⭐ سطح: {d['level']}\n👥 دوستان: {d['friends']}")
+    elif t=="➕ افزودن کانال":
+        bot.send_message(uid,"@کانال را ارسال کن")
+        bot.register_next_step_handler(msg,add_channel)
 
-# ---------- ACCESS ----------
-@bot.message_handler(func=lambda m:m.text=="🔐 درخواست دسترسی")
-def req(m):
-    uid=m.from_user.id
-    if uid in db["allowed_users"]:
-        return bot.send_message(uid,"✅ قبلاً تأیید شدی")
-    if uid in db["pending_users"]:
-        return bot.send_message(uid,"⏳ درخواستت در حال بررسیه")
+# ---------- تنظیم گروه ----------
+def set_target_group(msg):
+    g = msg.text.strip()
+    try:
+        bot.get_chat(g)
+        db["target_group"]=g
+        save_db()
+        bot.send_message(msg.chat.id,"✅ گروه مقصد ثبت شد")
+    except:
+        bot.send_message(msg.chat.id,"❌ گروه معتبر نیست")
 
-    db["pending_users"].append(uid)
-    save_db()
-    bot.send_message(
-        OWNER_ID,
-        f"📩 درخواست دسترسی\n👤 {m.from_user.first_name}\n🆔 {uid}",
-        reply_markup=owner_req_kb(uid)
-    )
-    bot.send_message(uid,"📨 درخواست ارسال شد")
-
-@bot.callback_query_handler(func=lambda c:c.data.startswith(("ok_","no_")))
-def decide(c):
-    uid=int(c.data.split("_")[1])
-    if c.data.startswith("ok_"):
-        db["allowed_users"].append(uid)
-        bot.send_message(uid,
-            "🎉 خوش آمدید!\n✅ دسترسی شما فعال شد\n🔁 لطفاً /start را دوباره بزنید")
-    else:
-        bot.send_message(uid,"❌ درخواست رد شد")
-    if uid in db["pending_users"]:
-        db["pending_users"].remove(uid)
-    save_db()
-    bot.answer_callback_query(c.id,"انجام شد")
-
-# ---------- OWNER ----------
-@bot.message_handler(func=lambda m:m.text=="🎯 تنظیم گروه مقصد")
-def set_group_step(m):
-    if m.from_user.id not in db["owners"]: return
-    bot.send_message(m.chat.id,"@group ؟")
-    bot.register_next_step_handler(m,set_group)
-
-def set_group(m):
-    db["target_group"]=m.text.strip()
-    save_db()
-    bot.send_message(m.chat.id,"✅ گروه مقصد تنظیم شد")
-
-@bot.message_handler(func=lambda m:m.text=="📋 لاگ کاربران")
-def logs(m):
-    if m.from_user.id not in db["owners"]: return
-    text="📊 لاگ کاربران:\n\n"
-    for uid,u in db["users"].items():
-        text+=(
-            f"🆔 {uid}\n"
-            f"🎚 سطح: {u['level']}\n"
-            f"📣 دعوت: {u['referrals']}\n"
-            f"📡 کانال‌ها: {len(u['channels'])}\n\n"
-        )
-    bot.send_message(m.chat.id,text)
-
-# ---------- STATS ----------
-@bot.message_handler(func=lambda m:m.text=="📊 آمار من")
-def stats(m):
-    u=db["users"][str(m.from_user.id)]
-    bot.send_message(
-        m.chat.id,
-        f"🎚 سطح: {u['level']}\n"
-        f"👥 دعوت‌ها: {u['referrals']}\n"
-        f"📡 کانال‌ها: {len(u['channels'])}"
-    )
-
-# ---------- CHANNEL ----------
-@bot.message_handler(func=lambda m:m.text=="➕ افزودن کانال")
-def add_ch_step(m):
-    bot.send_message(m.chat.id,"@channel ؟")
-    bot.register_next_step_handler(m,add_channel)
-
-def add_channel(m):
-    uid=str(m.chat.id)
-    ch=m.text.strip()
-    user=db["users"][uid]
-    lvl=LEVELS[user["level"]]
-
-    if len(user["channels"])>=lvl["channels"]:
-        return bot.send_message(m.chat.id,"❌ سقف کانال پر شده")
-
+# ---------- افزودن کانال ----------
+def add_channel(msg):
+    uid=msg.chat.id
+    ch=msg.text.strip()
     try:
         member=bot.get_chat_member(ch,bot.get_me().id)
         if member.status not in ["administrator","creator"]:
-            return bot.send_message(m.chat.id,"❌ ربات ادمین نیست")
+            return bot.send_message(uid,"❌ ربات باید ادمین کانال باشد")
     except:
-        return bot.send_message(m.chat.id,"❌ کانال نامعتبر")
+        return bot.send_message(uid,"❌ کانال معتبر نیست")
 
-    user["channels"].append(ch)
+    level=db["users"][uid]["level"]
+    limit=LEVELS[level]["channels"]
+
+    user_channels=db["channels"].get(str(uid),[])
+    if len(user_channels)>=limit:
+        return bot.send_message(uid,"⛔ سقف کانال شما پر شده")
+
+    user_channels.append(ch)
+    db["channels"][str(uid)]=user_channels
     save_db()
-    bot.send_message(m.chat.id,"✅ کانال اضافه شد")
+    bot.send_message(uid,"✅ کانال اضافه شد")
 
-@bot.message_handler(func=lambda m:m.text=="➖ حذف کانال")
-def rm_ch_step(m):
-    bot.send_message(m.chat.id,"@channel ؟")
-    bot.register_next_step_handler(m,rm_channel)
-
-def rm_channel(m):
-    uid=str(m.chat.id)
-    ch=m.text.strip()
-    if ch in db["users"][uid]["channels"]:
-        db["users"][uid]["channels"].remove(ch)
-        save_db()
-        bot.send_message(m.chat.id,"❌ حذف شد")
-
-# ---------- LIMIT ----------
-def can_forward(uid):
-    today=str(date.today())
-    user=db["users"][str(uid)]
-    lvl=LEVELS[user["level"]]
-
-    user["daily"].setdefault(today,0)
-    if user["daily"][today]>=lvl["limit"]:
-        return False
-    user["daily"][today]+=1
-    save_db()
-    return True
-
-# ---------- FORWARD ----------
-@bot.channel_post_handler(func=lambda m:True)
-def forward(m):
-    if not db["forward_on"] or not db["target_group"]: return
-    for uid,data in db["users"].items():
-        if can_forward(uid):
+# ---------- فروارد ----------
+@bot.channel_post_handler(func=lambda m: True)
+def forward(msg):
+    if not db["forward_enabled"] or not db["target_group"]:
+        return
+    for chans in db["channels"].values():
+        if msg.chat.username and "@"+msg.chat.username in chans:
             try:
-                bot.forward_message(db["target_group"],m.chat.id,m.message_id)
-            except:
-                pass
-
-# ---------- CONTROL ----------
-@bot.message_handler(func=lambda m:m.text=="▶️ شروع فوروارد")
-def start_fw(m):
-    if m.from_user.id not in db["allowed_users"]+db["owners"]: return
-    db["forward_on"]=True
-    save_db()
-    bot.send_message(m.chat.id,"▶️ فوروارد فعال شد")
-
-@bot.message_handler(func=lambda m:m.text=="⏹ توقف فوروارد")
-def stop_fw(m):
-    if m.from_user.id not in db["allowed_users"]+db["owners"]: return
-    db["forward_on"]=False
-    save_db()
-    bot.send_message(m.chat.id,"⏹ فوروارد متوقف شد")
+                bot.forward_message(db["target_group"],msg.chat.id,msg.message_id)
+            except: pass
 
 # ---------- WEBHOOK ----------
-@app.route("/",methods=["GET"])
-def home():
-    return "alive"
-
 @app.route(f"/{TOKEN}",methods=["POST"])
-def hook():
+def webhook():
     bot.process_new_updates([telebot.types.Update.de_json(request.json)])
-    return "ok"
+    return "OK",200
 
-def run():
-    if USE_WEBHOOK:
-        bot.remove_webhook()
-        bot.set_webhook(f"{WEBHOOK_URL}/{TOKEN}")
-        app.run(host="0.0.0.0",port=10000)
-    else:
-        bot.infinity_polling()
+@app.route("/")
+def home():
+    return "Bot is running"
 
-run()
+if __name__=="__main__":
+    bot.remove_webhook()
+    bot.set_webhook(url=f"{WEBHOOK_URL}/{TOKEN}")
+    app.run(host="0.0.0.0",port=10000)
