@@ -233,13 +233,26 @@ def set_group(msg):
 # ---------- فروارد ----------
 @bot.channel_post_handler(func=lambda m: True)
 def forward(msg):
-    for uid,ch in db["channels"].items():
-        if db["forward_status"].get(uid):
-            if msg.chat.username and "@"+msg.chat.username == ch:
-                for g in db["groups"]:
-                    try:
-                        bot.forward_message(g,msg.chat.id,msg.message_id)
-                    except: pass
+    chat_id = msg.chat.id
+    username = msg.chat.username
+    ch_tag = f"@{username}" if username else None
+
+    for uid, ch in db["channels"].items():
+        # آیا فروارد برای این کاربر فعاله؟
+        if not db["forward_status"].get(uid):
+            continue
+
+        # بررسی اینکه پیام از کانال ثبت‌شده اومده
+        if ch_tag == ch or str(chat_id) == ch:
+            for g in db["groups"]:
+                try:
+                    bot.forward_message(
+                        g,
+                        msg.chat.id,
+                        msg.message_id
+                    )
+                except:
+                    pass
 
 # ---------- WEBHOOK ----------
 @app.route(f"/{TOKEN}",methods=["POST"])
