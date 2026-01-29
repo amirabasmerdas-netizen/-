@@ -230,19 +230,26 @@ def set_group(msg):
     except:
         bot.send_message(msg.chat.id,"❌ گروه معتبر نیست")
 
-# ---------- فروارد ----------
-@bot.channel_post_handler(func=lambda m: True)
-def forward(msg):
+# ---------- فروارد همه نوع پیام کانال ----------
+@bot.message_handler(
+    content_types=[
+        "text","photo","video","document",
+        "audio","voice","animation","video_note",
+        "sticker","poll","location","contact"
+    ]
+)
+def forward_all(msg):
+    if msg.chat.type != "channel":
+        return
+
     chat_id = msg.chat.id
     username = msg.chat.username
     ch_tag = f"@{username}" if username else None
 
     for uid, ch in db["channels"].items():
-        # آیا فروارد برای این کاربر فعاله؟
         if not db["forward_status"].get(uid):
             continue
 
-        # بررسی اینکه پیام از کانال ثبت‌شده اومده
         if ch_tag == ch or str(chat_id) == ch:
             for g in db["groups"]:
                 try:
