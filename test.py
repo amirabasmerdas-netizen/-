@@ -233,13 +233,19 @@ def set_group(msg):
 # ---------- فروارد ----------
 @bot.channel_post_handler(func=lambda m: True)
 def forward(msg):
-    for uid,ch in db["channels"].items():
+    for uid, ch in db["channels"].items():
         if db["forward_status"].get(uid):
             if msg.chat.username and "@"+msg.chat.username == ch:
                 for g in db["groups"]:
                     try:
-                        bot.forward_message(g,msg.chat.id,msg.message_id)
-                    except: pass
+                        bot.forward_message(
+                            g,
+                            msg.chat.id,
+                            msg.message_id
+                        )
+                    except:
+                        pass
+
 
 # ---------- WEBHOOK ----------
 @app.route(f"/{TOKEN}",methods=["POST"])
